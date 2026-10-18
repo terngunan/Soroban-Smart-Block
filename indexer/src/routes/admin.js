@@ -1089,6 +1089,19 @@ export default function registerAdminRoutes(app) {
     }
   });
 
+  // ── GET /api/admin/consistency/duplicates (issue #1109) ──────────────────
+  // Consistency check for duplicate source event identities. Detects duplicate
+  // (network, event_id) and (contract_id, ledger, tx_hash) rows without
+  // double-counting: each duplicate group is reported once.
+  router.get("/consistency/duplicates", async (_req, res) => {
+    try {
+      const report = await db.getDuplicateEventIdentities();
+      return res.json(report);
+    } catch (e) {
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
   // Mount the router under /api/admin
   app.use("/api/admin", router);
 

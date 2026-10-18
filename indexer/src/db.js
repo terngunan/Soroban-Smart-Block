@@ -114,6 +114,72 @@ export const db = {
     return Number(rows[0].max_ledger);
   },
 
+  /**
+   * Run a consistency check for duplicate source event identities (issue #1109).
+   *
+   * Detects events that share the same source identity — either the canonical
+   * `(network, event_id)` or the ingestion key `(contract_id, ledger, tx_hash)`
+   * — without double-counting: each duplicate group is reported once, keyed by
+   * its identity, with the member seqs listed. Rows are scoped to this indexer's
+   * network.
+   *
+   * @returns {Promise<{ totalEvents: number, uniqueIdentities: number, duplicateGroups: Array<{ identity: string, kind: string, count: number, seqs: number[] }>, duplicatesDetected: boolean }>}
+   */
+  async getDuplicateEventIdentities() {
+    const network = getIndexerNetwork();
+
+    // Canonical source identity: (network, event_id). Only non-NULL event_id
+    // rows are eligible; the unique index prevents new duplicates here, but
+    // pre-migration or manually-inserted rows may still collide.
+    const { rows: eventIdRows } = await pool.query(
+      `SELECT event_id AS identity, 'event_id' AS kind, COUNT(*)::INT AS count,
+              ARRAY_AGG(seq ORDER BY seq) AS seqs
+       FROM events
+       WHERE network = $1 AND event_id IS NOT NULL
+       GROUP BY event_id
+       HAVING COUNT(*) > 1`,
+      [network],
+    );
+
+    // Ingestion identity: (contract_id, ledger, tx_hash). This is the upsert
+    // conflict key; duplicates here indicate the same source event was
+    // persisted more than once through different paths.
+    const { rows: ingestRows } = await pool.query(
+      `SELECT contract_id || ':' || ledger || ':' || COALESCE(tx_hash, '') AS identity,
+              'ingestion_key' AS kind, COUNT(*)::INT AS count,
+              ARRAY_AGG(seq ORDER BY seq) AS seqs
+       FROM events
+       WHERE network = $1
+       GROUP BY contract_id, ledger, tx_hash
+       HAVING COUNT(*) > 1`,
+      [network],
+    );
+
+    const duplicateGroups = [...eventIdRows, ...ingestRows].map((g) => ({
+      identity: g.identity,
+      kind: g.kind,
+      count: Number(g.count),
+      seqs: g.seqs,
+    }));
+
+    // Total events and unique identities for context, without double-counting
+    // duplicate members.
+    const { rows: totalRows } = await pool.query(
+      `SELECT COUNT(*)::INT AS total FROM events WHERE network = $1`,
+      [network],
+    );
+    const totalEvents = Number(totalRows[0]?.total ?? 0);
+    const duplicateMemberCount = duplicateGroups.reduce((s, g) => s + g.count, 0);
+    const uniqueIdentities = totalEvents - duplicateMemberCount + duplicateGroups.length;
+
+    return {
+      totalEvents,
+      uniqueIdentities,
+      duplicateGroups,
+      duplicatesDetected: duplicateGroups.length > 0,
+    };
+  },
+
   // ── daemon cursor persistence ──────────────────────────────────
   async saveDaemonState(key, value) {
     await pool.query(

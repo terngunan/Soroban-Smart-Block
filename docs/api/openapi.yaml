@@ -4047,6 +4047,62 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /api/rpc/compare:
+    get:
+      summary: RPC provider quality comparison for failover decisions
+      security: []
+      description: |
+        Compares latency, error rate, and ledger freshness across every
+        configured RPC provider, sorted by composite health score. Includes a
+        best/worst provider and an aggregate summary to inform failover.
+        Cached for 5s.
+      responses:
+        "200":
+          description: Provider quality comparison
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [providers, sorted, best, worst, summary]
+                properties:
+                  providers:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RpcProviderHealth"
+                  sorted:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RpcProviderHealth"
+                  best:
+                    $ref: "#/components/schemas/RpcProviderHealth"
+                    nullable: true
+                  worst:
+                    $ref: "#/components/schemas/RpcProviderHealth"
+                    nullable: true
+                  summary:
+                    type: object
+                    required: [totalProviders, healthyCount, avgLatency, avgErrorRate]
+                    properties:
+                      totalProviders:
+                        type: integer
+                        example: 3
+                      healthyCount:
+                        type: integer
+                        example: 2
+                      avgLatency:
+                        type: integer
+                        nullable: true
+                        example: 120
+                      avgErrorRate:
+                        type: number
+                        example: 0.5
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /api/export/events:
     get:
       summary: Export events as CSV or JSON
@@ -4334,6 +4390,53 @@ paths:
         "400":
           description: error_class missing
 
+  /api/admin/replay/dry-run:
+    get:
+      summary: Operator dry-run estimate for historical reprocessing (#1108)
+      security:
+        - AdminBearerAuth: []
+      description: |
+        Estimates the impact of reprocessing a historical ledger range —
+        affected ledgers, rows, duration, and storage — WITHOUT executing the
+        replay or writing any data. Returns a bounded report an operator can
+        review before committing to an expensive backfill.
+      parameters:
+        - name: from
+          in: query
+          required: true
+          schema:
+            type: integer
+            minimum: 0
+            example: 100
+        - name: to
+          in: query
+          required: true
+          schema:
+            type: integer
+            minimum: 0
+            example: 200
+      responses:
+        "200":
+          description: Replay dry-run estimate
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReplayDryRun"
+              examples:
+                success:
+                  summary: Estimate for a 101-ledger range
+                  value: { from: 100, to: 200, ledgersAffected: 56, rowsEstimated: 1234, estimatedDurationMs: 2468, estimatedStorageBytes: 1851000, digest: "a3f5..." }
+        "400":
+          description: Invalid or missing ledger range
+        "401":
+          description: Missing or invalid admin bearer token
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /api/admin/api-keys/{id}/signing-secret:
     post:
       summary: Issue a request-signing secret for an API key (#852)
@@ -4483,6 +4586,32 @@ paths:
                 success:
                   summary: Healthy decode rate
                   value: { total: 5000, decoded: 4980, undecoded: 20, success_rate: 0.996, window: "24h" }
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/stats/decode-outcomes:
+    get:
+      summary: Decode outcome counts by failure category over the last 24h
+      description: |
+        Aggregates decode outcomes by bounded failure category
+        (success / unsupported_type / missing_abi / invalid_xdr /
+        abi_mismatch / schema_violation / unknown) over a trailing
+        24-hour rolling window. Implements issue #1107.
+      responses:
+        "200":
+          description: Decode outcome breakdown
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DecodeOutcomeStats"
+              examples:
+                success:
+                  summary: Mostly healthy with a few missing ABI outcomes
+                  value: { byOutcome: { success: 4980, unsupported_type: 0, missing_abi: 15, invalid_xdr: 0, abi_mismatch: 3, schema_violation: 2, unknown: 0 }, total: 5000, window: "24h" }
         "500":
           description: Internal server error
           content:
@@ -4795,6 +4924,17 @@ components:
           maximum: 100
           description: Composite score — uptime 50% · inverse-latency 30% · inverse-error-rate 20%
           example: 97
+        ledgerFreshness:
+          type: integer
+          nullable: true
+          description: >-
+            How many ledgers behind the best-known provider this provider is.
+            0 means current; null when no ledger has been observed yet.
+          example: 3
+        disagreements:
+          type: integer
+          description: Number of times this provider disagreed with quorum in RPC verification
+          example: 0
 
     DecoderStats:
       type: object
@@ -4820,6 +4960,69 @@ components:
         window:
           type: string
           example: "24h"
+
+    DecodeOutcomeStats:
+      type: object
+      required: [byOutcome, total, window]
+      properties:
+        byOutcome:
+          type: object
+          description: >-
+            Count of events per bounded decode_outcome category. Every category
+            in the closed set is present, even when zero.
+          additionalProperties:
+            type: integer
+            minimum: 0
+          example:
+            success: 4980
+            unsupported_type: 0
+            missing_abi: 15
+            invalid_xdr: 0
+            abi_mismatch: 3
+            schema_violation: 2
+            unknown: 0
+        total:
+          type: integer
+          minimum: 0
+          example: 5000
+        window:
+          type: string
+          example: "24h"
+
+    ReplayDryRun:
+      type: object
+      required: [from, to, ledgersAffected, rowsEstimated, estimatedDurationMs, estimatedStorageBytes, digest]
+      properties:
+        from:
+          type: integer
+          description: Start of the ledger range (inclusive)
+          example: 100
+        to:
+          type: integer
+          description: End of the ledger range (inclusive)
+          example: 200
+        ledgersAffected:
+          type: integer
+          description: Number of distinct ledgers that have events in the range
+          example: 56
+        rowsEstimated:
+          type: integer
+          description: Estimated number of event rows in the range
+          example: 1234
+        estimatedDurationMs:
+          type: integer
+          description: Estimated reprocessing duration in milliseconds
+          example: 2468
+        estimatedStorageBytes:
+          type: integer
+          description: Estimated storage bytes for the replayed rows
+          example: 1851000
+        digest:
+          type: string
+          description: >-
+            SHA-256 digest of the rows currently in range, to detect concurrent
+            backfill/reorg between the dry-run and the real replay.
+          example: "a3f5c8e2..."
 
     HealthErrorStatus:
       type: object
@@ -5667,6 +5870,13 @@ components:
           type: string
           enum: [verified, unverified, heuristic]
           description: Trust level assigned by ABI shape validation.
+        decode_outcome:
+          type: string
+          enum: [success, unsupported_type, missing_abi, invalid_xdr, abi_mismatch, schema_violation, unknown]
+          description: >-
+            Bounded label classifying how the event was decoded. Complements
+            decode_status (trust): success, or one of a fixed set of failure
+            categories.
         decode_warnings:
           type: array
           items:

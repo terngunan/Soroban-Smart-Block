@@ -122,6 +122,62 @@ function extractGasCosts(ev) {
   return result;
 }
 
+// ── Decode outcome categories (issue #1107) ────────────────────────────────────
+// Bounded label classifying *how* an event was decoded. Complements
+// `decode_status` (which describes trust: verified / unverified / heuristic).
+// `decode_outcome` describes the result: success, or one of a fixed set of
+// failure categories. The set is intentionally closed so analytics can group
+// without drift; new failure modes map to `unknown` until a category exists.
+export const DECODE_OUTCOMES = Object.freeze([
+  "success",
+  "unsupported_type",
+  "missing_abi",
+  "invalid_xdr",
+  "abi_mismatch",
+  "schema_violation",
+  "unknown",
+]);
+
+/** Default outcome for a row that has not been re-decoded since #1107. */
+export const DEFAULT_DECODE_OUTCOME = "success";
+
+/**
+ * Classify a thrown decode error into a bounded outcome category.
+ *
+ * The error message is matched against a fixed set of patterns; anything that
+ * does not match falls through to `unknown`. This keeps the label set stable
+ * even as the decoder gains new code paths.
+ *
+ * @param {Error} err
+ * @returns {string} one of DECODE_OUTCOMES (never "success")
+ */
+export function classifyDecodeFailure(err) {
+  const msg = String(err?.message ?? err ?? "");
+  if (/unsupported (arm|union|type|variant)|bad union switch|unknown arm|not implemented/i.test(msg))
+    return "unsupported_type";
+  if (/invalid xdr|malformed|xdr parse|fromXDR|base64/i.test(msg)) return "invalid_xdr";
+  if (/abi_missing|no (registered )?abi|no on-chain spec/i.test(msg)) return "missing_abi";
+  if (/abi_arity_mismatch|abi_type_mismatch|abi_mismatch/i.test(msg)) return "abi_mismatch";
+  if (/schema validation|schema_violation|ajv/i.test(msg)) return "schema_violation";
+  return "unknown";
+}
+
+/**
+ * Classify a decoded record that did NOT throw into a bounded outcome.
+ *
+ * A successful decode() call can still produce a record whose decode_status
+ * signals a soft failure (e.g. heuristic fallback). Those are reported as
+ * `success` at the outcome layer — the outcome answers "did the decoder
+ * produce output?", not "was the output trustworthy?".
+ *
+ * @param {object|null} decoded
+ * @returns {string}
+ */
+export function outcomeForDecodedRecord(decoded) {
+  if (!decoded) return "unknown";
+  return DEFAULT_DECODE_OUTCOME;
+}
+
 // Function names recognised as DEX swaps for slippage computation (issue #554).
 const SWAP_FUNCTIONS = new Set(["swap", "swap_exact_tokens_for_tokens"]);
 
@@ -174,7 +230,7 @@ const BLEND_CONTRACT_ID = config.BLEND_CONTRACT_ID || null;
 // to storing a per-event timestamp list while still giving an accurate 24h
 // window for GET /api/stats/decoder and the DECODE_RATE_LOW alert.
 const DECODE_STATS_WINDOW_HOURS = 24;
-const _decodeBuckets = new Map(); // hourKey -> { success, failure }
+const _decodeBuckets = new Map(); // hourKey -> { success, failure, byOutcome: Record<string, number> }
 
 function _currentHourKey() {
   return Math.floor(Date.now() / 3_600_000);
@@ -187,14 +243,15 @@ function _pruneDecodeBuckets() {
   }
 }
 
-function _recordDecodeOutcome(success) {
+function _recordDecodeOutcome(success, outcome = DEFAULT_DECODE_OUTCOME) {
   if (success) decoderSuccessTotal.inc();
   else decoderFailureTotal.inc();
 
   const key = _currentHourKey();
-  const bucket = _decodeBuckets.get(key) ?? { success: 0, failure: 0 };
+  const bucket = _decodeBuckets.get(key) ?? { success: 0, failure: 0, byOutcome: {} };
   if (success) bucket.success++;
   else bucket.failure++;
+  bucket.byOutcome[outcome] = (bucket.byOutcome[outcome] ?? 0) + 1;
   _decodeBuckets.set(key, bucket);
   _pruneDecodeBuckets();
 }
@@ -219,6 +276,31 @@ export function getDecodeStats() {
     success_rate: total ? Number((decoded / total).toFixed(4)) : 1,
     window: "24h",
   };
+}
+
+/**
+ * Decode outcome counts over the trailing 24 hours, for
+ * GET /api/stats/decode-outcomes (issue #1107).
+ *
+ * Aggregates the bounded `decode_outcome` label attached to every decoded
+ * record and every thrown decode error. Unlike getDecodeStats() (which only
+ * tracks success vs. failure), this breaks failures down by category:
+ * success, unsupported_type, missing_abi, invalid_xdr, abi_mismatch,
+ * schema_violation, unknown.
+ *
+ * @returns {{ byOutcome: Record<string, number>, total: number, window: string }}
+ */
+export function getDecodeOutcomeStats() {
+  _pruneDecodeBuckets();
+  const byOutcome = Object.fromEntries(DECODE_OUTCOMES.map((c) => [c, 0]));
+  let total = 0;
+  for (const bucket of _decodeBuckets.values()) {
+    total += bucket.success + bucket.failure;
+    for (const [category, count] of Object.entries(bucket.byOutcome ?? {})) {
+      if (category in byOutcome) byOutcome[category] += count;
+    }
+  }
+  return { byOutcome, total, window: "24h" };
 }
 
 /**
@@ -258,7 +340,10 @@ export function validateAbiEventShape(fnAbi, args) {
 export async function decode(ev, opts = {}) {
   try {
     const decoded = await decodeEvent(ev, opts);
-    _recordDecodeOutcome(true);
+    // Attach the bounded outcome label (issue #1107) — success for every
+    // record the decoder produced, regardless of decode_status trust level.
+    decoded.decode_outcome = outcomeForDecodedRecord(decoded);
+    _recordDecodeOutcome(true, decoded.decode_outcome);
     // Hashed topic columns for RPC-compatible topic filters (#903).
     if (decoded && Array.isArray(ev.topic)) {
       try {
@@ -269,8 +354,13 @@ export async function decode(ev, opts = {}) {
     }
     return decoded;
   } catch (err) {
-    _recordDecodeOutcome(false);
-    throw err;
+    const outcome = classifyDecodeFailure(err);
+    _recordDecodeOutcome(false, outcome);
+    // Surface the bounded failure category alongside the thrown error so
+    // callers (re-decode worker, DLQ handler, analytics) can group failures
+    // without re-parsing the message.
+    const errWithOutcome = Object.assign(err, { decode_outcome: outcome });
+    throw errWithOutcome;
   }
 }
 

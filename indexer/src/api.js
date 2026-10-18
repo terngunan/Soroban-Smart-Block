@@ -53,12 +53,12 @@ import { fetchWalletBalances, fetchAccountMeta, AccountNotFoundError } from "./h
 import { attachWebSocketServer, attachEventStreamRoutes, getTransactionStatus, onTransactionStatus, offTransactionStatus } from "./wsEvents.js";
 import { verifyAbi } from "./verify_abi.js";
 import { getMetrics } from "./rpcMetrics.js";
-import { getRpcNodeStatus, getProviderStats, multiNodeRpc } from "./rpcMultiNode.js";
+import { getRpcNodeStatus, getProviderStats, getProviderComparison, multiNodeRpc } from "./rpcMultiNode.js";
 import { cacheHitTotal, cacheMissTotal, apiRequestDuration, httpRequestsInFlight } from "./metrics.js";
 import { tracer, getTraceHeaders } from "./tracing.js";
 import { context, propagation } from "@opentelemetry/api";
 import { getUptimeHistory } from "./uptimeRecorder.js";
-import { getDecodeStats } from "./decoder.js";
+import { getDecodeStats, getDecodeOutcomeStats } from "./decoder.js";
 // ── Auth & Rate Limiting ──────────────────────────────────────────────────────
 import { apiKeyAuthenticator } from "./auth/apiKeyAuth.js";
 import { scopeMiddleware, assertRoutesDeclareScopes } from "./auth/scopes.js";
@@ -3296,6 +3296,19 @@ export function createApi({ logDestination, dbOverride } = {}) {
     },
   );
 
+  // GET /api/rpc/compare — provider quality comparison for failover decisions
+  app.get(
+    "/api/rpc/compare",
+    makeCache("rpc_compare", () => "rpc:compare"),
+    (_req, res) => {
+      try {
+        res.json(getProviderComparison());
+      } catch (e) {
+        res.status(500).json({ error: e.message });
+      }
+    },
+  );
+
   // ── Multi-Signature Source Code Verification ───────────────────
 
   // POST /api/contracts/:id/source-verifications
@@ -4004,6 +4017,17 @@ export function createApi({ logDestination, dbOverride } = {}) {
   app.get("/api/stats/decoder", (_req, res) => {
     try {
       res.json(getDecodeStats());
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── Decoder outcomes endpoint ──────────────────────────────────────────────
+  // GET /api/stats/decode-outcomes — decode outcome counts broken down by
+  // failure category over the trailing 24h (issue #1107).
+  app.get("/api/stats/decode-outcomes", (_req, res) => {
+    try {
+      res.json(getDecodeOutcomeStats());
     } catch (e) {
       res.status(500).json({ error: e.message });
     }

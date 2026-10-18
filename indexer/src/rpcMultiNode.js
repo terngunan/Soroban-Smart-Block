@@ -176,7 +176,7 @@ export function getRpcNodeStatus() {
  * kept as separate terms so the weighting stays legible).
  */
 export function getProviderStats() {
-  return nodes.map((node) => {
+  const nodesList = nodes.map((node) => {
     const total = node._outcomes.length;
     const successCount = node._outcomes.filter(Boolean).length;
     const uptime = total ? Number(((successCount / total) * 100).toFixed(2)) : 100;
@@ -199,4 +199,52 @@ export function getProviderStats() {
       disagreements: node.disagreements,
     };
   });
+
+  // Ledger freshness: distance from the best-known ledger across all providers.
+  const bestLedger = Math.max(0, ...nodesList.map((n) => n.latestLedger ?? 0));
+  return nodesList.map((n) => ({
+    ...n,
+    ledgerFreshness: n.latestLedger != null ? bestLedger - Number(n.latestLedger) : null,
+  }));
+}
+
+/**
+ * Provider quality comparison across all configured RPC providers (issue
+ * #1111). Normalises latency, error rate, and ledger freshness so an
+ * operator can see which provider is the best failover target.
+ *
+ * Returns a comparison array sorted by healthScore desc, with the primary
+ * node flagged. Includes a summary of the best/worst providers.
+ *
+ * @returns {Promise<{ providers: object[], best: object|null, worst: object|null, summary: object }>}
+ */
+export function getProviderComparison() {
+  const providers = getProviderStats();
+  const sorted = [...providers].sort((a, b) => b.healthScore - a.healthScore);
+  const best = sorted[0] ?? null;
+  const worst = sorted[sorted.length - 1] ?? null;
+
+  return {
+    providers: providers,
+    sorted,
+    best,
+    worst,
+    summary: {
+      totalProviders: providers.length,
+      healthyCount: providers.filter((p) => p.healthy).length,
+      avgLatency:
+        providers.length > 0
+          ? Math.round(
+              providers.reduce((s, p) => s + (p.avgLatency ?? 0), 0) /
+                providers.filter((p) => p.avgLatency != null).length,
+            )
+          : null,
+      avgErrorRate:
+        providers.length > 0
+          ? Number(
+              (providers.reduce((s, p) => s + (p.errorRate ?? 0), 0) / providers.length).toFixed(2),
+            )
+          : null,
+    },
+  };
 }

@@ -16,6 +16,7 @@ const LedgerPage = lazy(() => import("./pages/LedgerPage"));
 const SearchPage = lazy(() => import("./pages/SearchPage"));
 const XdrInspector = lazy(() => import("./pages/XdrInspector"));
 const RpcMetricsDashboard = lazy(() => import("./pages/RpcMetricsDashboard"));
+const RpcProviderComparePage = lazy(() => import("./pages/RpcProviderComparePage"));
 const GraphPage = lazy(() => import("./pages/GraphPage"));
 const Sandbox = lazy(() => import("./pages/Sandbox"));
 const SharedSandbox = lazy(() => import("./pages/SharedSandbox"));
@@ -65,6 +66,7 @@ export default function App() {
             <Route path="/search" element={<SearchPage />} />
             <Route path="/xdr" element={<ClientOnly><XdrInspector /></ClientOnly>} />
             <Route path="/rpc-metrics" element={<RpcMetricsDashboard />} />
+            <Route path="/rpc-providers" element={<RpcProviderComparePage />} />
             <Route path="/graph" element={<GraphPage />} />
             <Route path="/sandbox" element={<Sandbox />} />
             <Route path="/sandbox/:id" element={<SharedSandbox />} />

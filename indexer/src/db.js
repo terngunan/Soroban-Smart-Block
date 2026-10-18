@@ -568,9 +568,9 @@ export const db = {
          (contract_id, function, ledger, tx_hash, description, raw_topics, raw_data,
           cpu_instructions, mem_bytes, fee_charged, is_high_bloat_risk, upgrade_info, storage_tiers, is_clawback,
           footprint_contention, ttl_extension, fee_bump, archival_info, zk_host_calls, abi_version, slippage_bps,
-          topic0, topic1, topic2, topic3, topic_count, lineage_batch_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)
-       ON CONFLICT (contract_id, ledger, tx_hash) DO NOTHING`,
+          topic0, topic1, topic2, topic3, topic_count, lineage_batch_id, decode_outcome)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)
+        ON CONFLICT (contract_id, ledger, tx_hash) DO NOTHING`,
       [
         ev.contract_id,
         ev.function,
@@ -597,6 +597,7 @@ export const db = {
         ...[0, 1, 2, 3].map((i) => (ev.topic_hashes?.[i] ? Buffer.from(ev.topic_hashes[i], "hex") : null)),
         ev.topic_count ?? null,
         ev.lineage_batch_id ?? null,
+        ev.decode_outcome ?? "success",
       ],
     );
     return rows[0]?.seq ?? null;
@@ -636,6 +637,41 @@ export const db = {
     return rowCount ?? 0;
   },
 
+  /**
+   * Count indexed events by `decode_outcome` (issue #1107).
+   *
+   * `outcome` is one of the bounded DECODE_OUTCOMES set; rows whose column is
+   * NULL (pre-#1107) are counted under "success" — a row with a valid
+   * decode_status was decoded successfully until a re-decode proves otherwise.
+   *
+   * @param {string} outcome
+   * @returns {Promise<number>}
+   */
+  async countEventsByDecodeOutcome(outcome) {
+    const safe = String(outcome ?? "success");
+    const { rows } = await pool.query(
+      `SELECT COUNT(*)::INT AS count FROM events
+       WHERE COALESCE(decode_outcome, 'success') = $1`,
+      [safe],
+    );
+    return Number(rows[0]?.count ?? 0);
+  },
+
+  /**
+   * Full breakdown of `decode_outcome` counts for the outcomes analytics
+   * endpoint. One row per outcome present in the table (plus a zero-count
+   * entry for every bounded category, so the response shape is stable).
+   *
+   * @returns {Promise<Array<{ outcome: string, count: number }>>}
+   */
+  async getDecodeOutcomeBreakdown() {
+    const { rows } = await pool.query(
+      `SELECT COALESCE(decode_outcome, 'success') AS outcome, COUNT(*)::INT AS count
+       FROM events GROUP BY COALESCE(decode_outcome, 'success')`,
+    );
+    return rows;
+  },
+
   async getEventsNeedingRedecode(limit = 100) {
     const safeLimit = Number(limit);
     if (!Number.isInteger(safeLimit) || safeLimit < 1 || safeLimit > 1000) {
@@ -661,10 +697,11 @@ export const db = {
            raw_data = $5,
            abi_version = $6,
            decode_status = $7,
-           decode_warnings = $8,
+           decode_outcome = $8,
+           decode_warnings = $9,
            needs_redecode = FALSE
-       WHERE seq = $1 AND needs_redecode = TRUE`,
-      [seq, decoded.function, decoded.description, JSON.stringify(decoded.raw_topics), decoded.raw_data, abiVersion],
+      WHERE seq = $1 AND needs_redecode = TRUE`,
+      [seq, decoded.function, decoded.description, JSON.stringify(decoded.raw_topics), decoded.raw_data, abiVersion, decoded.decode_status ?? "heuristic", decoded.decode_outcome ?? "success", JSON.stringify(decoded.decode_warnings ?? [])],
     );
   },
 
@@ -711,6 +748,7 @@ export const db = {
       "zk_host_calls",
       "abi_version",
       "slippage_bps",
+      "decode_outcome",
     ];
 
     const placeholders = [];
@@ -739,6 +777,7 @@ export const db = {
         ev.zk_host_calls ? JSON.stringify(ev.zk_host_calls) : null,
         ev.abi_version ?? 0,
         ev.slippage_bps ?? null,
+        ev.decode_outcome ?? "success",
       ];
 
       const start = params.length + 1;

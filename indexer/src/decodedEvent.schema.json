@@ -118,6 +118,11 @@
       "type": "string",
       "enum": ["verified", "unverified", "heuristic"]
     },
+    "decode_outcome": {
+      "type": "string",
+      "enum": ["success", "unsupported_type", "missing_abi", "invalid_xdr", "abi_mismatch", "schema_violation", "unknown"],
+      "description": "Bounded label classifying how the event was decoded. Complements decode_status (trust)."
+    },
     "decode_warnings": {
       "type": "array",
       "items": { "type": "string" }

@@ -30,6 +30,7 @@ import { listKeys, createKey, updateKey, deleteKey, rotateKey, getKeyUsage } fro
 import { db, pool } from "../db.js";
 import { getActiveAlerts, resolveAlert } from "../alertManager.js";
 import { createSigningSecret } from "../auth/requestSigning.js";
+import { replayDryRun } from "../replay/dryrun.js";
 import {
   decodeCursor,
   hashFilters,
@@ -1064,6 +1065,26 @@ export default function registerAdminRoutes(app) {
       const requeued = await requeueByErrorClass(errorClass, { signal: controller.signal });
       return res.json({ ok: true, error_class: errorClass, requeued });
     } catch (e) {
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── GET /api/admin/replay/dry-run?from=X&to=Y ─────────────────────────────
+  // Issue #1108 — operator dry-run for historical reprocessing. Estimates
+  // affected ledgers, rows, duration, and storage for a ledger range without
+  // executing the replay or writing any data.
+  //
+  // 400 — invalid/missing range
+  // 200 — { from, to, ledgersAffected, rowsEstimated, estimatedDurationMs,
+  //         estimatedStorageBytes, digest }
+  router.get("/replay/dry-run", async (req, res) => {
+    try {
+      const estimate = await replayDryRun({ from: req.query.from, to: req.query.to });
+      return res.json(estimate);
+    } catch (e) {
+      if (e.message.includes("invalid ledger range")) {
+        return res.status(400).json({ error: e.message });
+      }
       return res.status(500).json({ error: e.message });
     }
   });

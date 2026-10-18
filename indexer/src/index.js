@@ -219,7 +219,7 @@ export async function processSingleEvent(rawSorobanEvent, context = undefined, l
     decoded = await decode(rawSorobanEvent);
   } catch (error) {
     if (!/unknown|arm|union|xdr/i.test(error.message)) throw error;
-    decoded = { contract_id: rawSorobanEvent.contractId, ledger: Number(rawSorobanEvent.ledger), tx_hash: rawSorobanEvent.txHash ?? "unknown", function: "unknown", description: "Deferred: unsupported protocol XDR", raw_topics: rawSorobanEvent.topic ?? [], raw_data: typeof rawSorobanEvent.value === "string" ? rawSorobanEvent.value : JSON.stringify(rawSorobanEvent.value ?? null), protocol_degraded: true, raw_xdr: rawSorobanEvent.rawXdr ?? rawSorobanEvent.xdr ?? null };
+    decoded = { contract_id: rawSorobanEvent.contractId, ledger: Number(rawSorobanEvent.ledger), tx_hash: rawSorobanEvent.txHash ?? "unknown", function: "unknown", description: "Deferred: unsupported protocol XDR", raw_topics: rawSorobanEvent.topic ?? [], raw_data: typeof rawSorobanEvent.value === "string" ? rawSorobanEvent.value : JSON.stringify(rawSorobanEvent.value ?? null), protocol_degraded: true, raw_xdr: rawSorobanEvent.rawXdr ?? rawSorobanEvent.xdr ?? null, decode_outcome: error.decode_outcome ?? "unsupported_type" };
   }
   const contractMeta = await db.getContractMeta(rawSorobanEvent.contractId).catch(() => null);
   decoded.abi_version = Number(contractMeta?.abi_version ?? 0);

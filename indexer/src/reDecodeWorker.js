@@ -98,7 +98,27 @@ export async function runDecoderUpgradeBatch({ dbModule = db, decodeFn = decode,
         await dbModule.markDecoderRetired(row.seq);
         continue;
       }
-      const decoded = await decodeFn(rawEventFromRow(row), { currentAbi: true });
+      let decoded;
+      try {
+        decoded = await decodeFn(rawEventFromRow(row), { currentAbi: true });
+      } catch (err) {
+        // A failed re-decode records the bounded failure category (#1107) so
+        // the outcome analytics endpoint can attribute it correctly.
+        await dbModule.updateRedecodedEvent(
+          row.seq,
+          {
+            function: "unknown",
+            description: "Re-decode failed",
+            raw_topics: row.raw_topics,
+            raw_data: row.raw_data,
+            decode_status: "heuristic",
+            decode_outcome: err.decode_outcome ?? "unknown",
+            decode_warnings: [String(err?.message ?? err).slice(0, 500)],
+          },
+          Number(row.abi_version ?? 0),
+        );
+        continue;
+      }
       await dbModule.replaceDecodedOutput(row, decoded);
       processed++;
     } catch (error) {

@@ -14,6 +14,7 @@ const NAV_LINKS = [
   { to: "/search", key: "nav.search" },
   { to: "/xdr", key: "nav.xdr" },
   { to: "/rpc-metrics", key: "nav.rpcMetrics" },
+  { to: "/rpc-providers", key: "nav.rpcProviders" },
   { to: "/graph", key: "nav.depGraph" },
   { to: "/sandbox", key: "nav.sandbox" },
   { to: "/batch", key: "nav.batch" },

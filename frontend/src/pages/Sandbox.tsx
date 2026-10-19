@@ -40,11 +40,29 @@ const SimulationPanel: React.FC<SimulationPanelProps> = ({ sandboxId = "", files
   const [contractId, setContractId] = useState("");
   const [fn, setFn] = useState("");
   const [args, setArgs] = useState("[]");
+  const [sourceAccount, setSourceAccount] = useState("");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [result, setResult] = useState<SimulationResult | null>(null);
   const [activeTab, setActiveTab] = useState<"simulate" | "vectors" | "xdr" | "checkpoints">("simulate");
   const [customXdrInput, setCustomXdrInput] = useState("");
+
+  // Auth Validation state (#1093)
+  const [authValidation, setAuthValidation] = useState<AuthValidationResult | null>(null);
+
+  // Replay state (#1090)
+  const [replayResult, setReplayResult] = useState<ReplayResult | null>(null);
+  const [scenarioName, setScenarioName] = useState("");
+  const [ledgerSeq, setLedgerSeq] = useState("100000");
+  const [timestamp, setTimestamp] = useState(String(Math.floor(Date.now() / 1000)));
+
+  // Protocol Comparison state (#1091)
+  const [protocolResult, setProtocolResult] = useState<ProtocolComparisonResult | null>(null);
+
+  // Scenario Collections state (#1092)
+  const [collections, setCollections] = useState<Array<{ id: string; name: string; scenarioCount: number }>>([]);
+  const [collectionName, setCollectionName] = useState("");
+  const [importJson, setImportJson] = useState("");
 
   const host = async () => {
     if (!hostRef.current) {
@@ -70,6 +88,14 @@ const SimulationPanel: React.FC<SimulationPanelProps> = ({ sandboxId = "", files
     withBusy(async () => {
       const n = await (await host()).importState(contractId, fn, parseArgs(args));
       setStatus(`Imported ${n} ledger entries from the network`);
+    });
+
+  const handleValidateAuth = () =>
+    withBusy(async () => {
+      const parsed = parseArgs(args);
+      const res = await validateSimulationAuth(contractId, fn, parsed, [], sourceAccount || undefined);
+      setAuthValidation(res);
+      setStatus(res.valid ? "✓ Authorization valid" : `⚠ ${res.explanation}`);
     });
 
   const simulate = () =>

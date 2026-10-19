@@ -1,15 +1,20 @@
-import { Account, Address, BASE_FEE, Keypair, Networks, Operation, TransactionBuilder, nativeToScVal, xdr } from "@stellar/stellar-sdk";
+import {
+  Account,
+  Address,
+  BASE_FEE,
+  Keypair,
+  Networks,
+  Operation,
+  TransactionBuilder,
+  nativeToScVal,
+  xdr,
+} from "@stellar/stellar-sdk";
 import { SandboxFile } from "./webcontainer";
 
 // ImportMetaEnv (including VITE_API_URL) is declared globally in src/env.d.ts.
 const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:3001";
 const DEFAULT_RPC_URL = import.meta.env.VITE_SOROBAN_RPC_URL || "https://soroban-testnet.stellar.org";
-type SorobanReadMethod =
-  | "simulateTransaction"
-  | "getLedgerEntries"
-  | "getLatestLedger"
-  | "getNetwork"
-  | "getEvents";
+type SorobanReadMethod = "simulateTransaction" | "getLedgerEntries" | "getLatestLedger" | "getNetwork" | "getEvents";
 
 export async function sorobanRpcRequest<T>(
   rpcUrl: string,
@@ -253,7 +258,9 @@ interface LocalState {
 export function parseArgs(json: string): xdr.ScVal[] {
   const values = json.trim() ? JSON.parse(json) : [];
   if (!Array.isArray(values)) throw new Error("Arguments must be a JSON array");
-  return values.map((v) => (typeof v === "string" && /^[GC][A-Z2-7]{55}$/.test(v) ? new Address(v).toScVal() : nativeToScVal(v)));
+  return values.map((v) =>
+    typeof v === "string" && /^[GC][A-Z2-7]{55}$/.test(v) ? new Address(v).toScVal() : nativeToScVal(v),
+  );
 }
 
 function invokeHostFunction(contractId: string, fn: string, args: xdr.ScVal[]): xdr.HostFunction {
@@ -401,7 +408,11 @@ export class LocalSandboxHost {
       stateDiff: { key: string; before: string | null; after: string | null }[];
     }>({ op: "invoke", hostFn: invokeHostFunction(contractId, fn, args).toXDR("base64"), diagnostics: false });
     const warnings: string[] = [];
-    if (this.protocolVersion !== null && this.networkProtocol !== null && this.protocolVersion !== this.networkProtocol) {
+    if (
+      this.protocolVersion !== null &&
+      this.networkProtocol !== null &&
+      this.protocolVersion !== this.networkProtocol
+    ) {
       warnings.push(
         `Bundled host is protocol ${this.protocolVersion} but imported state is from protocol ${this.networkProtocol}; results may differ from the network.`,
       );
